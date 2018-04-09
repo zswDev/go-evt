@@ -28,6 +28,7 @@ func Goid() int {
 	return id
 }
 
+// TODO,链表实现，监听者链表
 type EvtGroup struct {
 	onMap   map[int]map[string]func(interface{})
 	emitMap map[int]map[string][]interface{}
@@ -116,24 +117,22 @@ func (this EvtGroup) loop() { // 多协程事件循环
 	}()
 
 	for {
-		// 事件通知，全部协程都收取
+		// 事件发射通知，全部协程都收取
 		for gid, nodeEmitMap := range this.emitMap {
 			// 获取某个节点的事件
 
 			for evtname, emitdata := range nodeEmitMap {
 				for _, data := range emitdata {
-					for _, nodeOnMap := range this.onMap { // 获取某个节点的监听事件
-						cb := nodeOnMap[evtname]
-						if cb != nil {
-							cb(data)
-						}
+					cb := this.onMap[thisgid][evtname] // 获取当前节点的监听事件
+					if cb != nil {
+						cb(data)
 					}
 				}
 				delete(this.emitMap[gid], evtname)
 			}
 		}
 
-		// 时间循环, 只在各自协程内调用
+		// 时间循环
 		now := time.Now().UnixNano() / 1000000
 		for i, cbs := range this.date[thisgid] {
 			if i <= now {
@@ -151,89 +150,8 @@ func (this EvtGroup) loop() { // 多协程事件循环
 	}
 }
 
-/*
-单协程通知，可能出错
-
-type Evt struct {
-	onMap   map[string]func(interface{})
-	emitMap map[string][]interface{}
-	date    map[int64][]func()
-}
-func EvtCreate() *Evt {
-	this := new(Evt)
-	this.onMap = make(map[string]func(interface{}))
-	this.emitMap = make(map[string][]interface{})
-	this.date = make(map[int64][]func())
-	return this
-}
-func (this Evt) on(str string, callback func(interface{})) {
-	this.onMap[str] = callback
-}
-func (this Evt) once(str string, callback func(interface{})) {
-	this.onMap[str] = func(d interface{}) {
-		callback(d)
-		delete(this.onMap, str)
-	}
-}
-
-func (this Evt) emit(str string, data interface{}) {
-	fmt.Println(Goid())
-	emit := this.emitMap[str]
-	if emit != nil {
-		this.emitMap[str] = append(emit, data)
-	} else {
-		this.emitMap[str] = []interface{}{data}
-	}
-}
-func (this Evt) close(str string) {
-	delete(this.onMap, str)
-}
-func (this Evt) setTime(cb func(), tlen int64) {
-	tlen = time.Now().UnixNano()/1000000 + tlen
-	cbs := this.date[tlen]
-	if cbs != nil {
-		this.date[tlen] = append(cbs, cb)
-	} else {
-		this.date[tlen] = []func(){cb}
-	}
-}
-func (this Evt) loop() { // 单线程事件循环
-
-	for {
-		time.Sleep(time.Millisecond * 1)
-		for evtname, emitdata := range this.emitMap {
-			for _, data := range emitdata {
-				cb := this.onMap[evtname]
-				if cb != nil {
-					cb(data)
-				}
-			}
-			delete(this.emitMap, evtname)
-		}
-
-		// 时间循环
-		now := time.Now().UnixNano() / 1000000
-		for i, cbs := range this.date {
-			if i <= now {
-				for _, cb := range cbs {
-					cb()
-				}
-				delete(this.date, i)
-			}
-		}
-		if len(this.date) == 0 {
-			fmt.Println("exit loop")
-			return
-		}
-	}
-} */
-
 func main() {
 	evt := EvtCreate()
-	if evt.emitMap[Goid()] == nil {
-		fmt.Println("aaa")
-	}
-	//evt.emitMap[Goid()] = make(map[string][]interface{})
 
 	evt.on("evt", func(data interface{}) {
 		fmt.Println(Goid(), data)
