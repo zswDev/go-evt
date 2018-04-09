@@ -29,8 +29,13 @@ func Goid() int {
 }
 
 // TODO,链表实现，监听者链表
+type List struct { // 监听链表
+	cb  func(interface{})
+	ptr *List
+}
+
 type EvtGroup struct {
-	onMap   map[int]map[string]func(interface{})
+	onMap   map[int]map[string][]func(interface{})
 	emitMap map[int]map[string][]interface{}
 	date    map[int]map[int64][]func()
 }
@@ -52,7 +57,7 @@ func eGoid(this EvtGroup) int {
 
 	// 初始化
 	if this.onMap[id] == nil {
-		this.onMap[id] = make(map[string]func(interface{}))
+		this.onMap[id] = make(map[string][]func(interface{}))
 	}
 	if this.emitMap[id] == nil {
 		this.emitMap[id] = make(map[string][]interface{})
@@ -64,10 +69,9 @@ func eGoid(this EvtGroup) int {
 	return id
 }
 
-// 前一个值是，goid 保证，数据不冲突
 func EvtCreate() *EvtGroup {
 	this := new(EvtGroup)
-	this.onMap = make(map[int]map[string]func(interface{}))
+	this.onMap = make(map[int]map[string][]func(interface{}))
 	this.emitMap = make(map[int]map[string][]interface{})
 	this.date = make(map[int]map[int64][]func())
 	return this
@@ -75,13 +79,24 @@ func EvtCreate() *EvtGroup {
 
 func (this EvtGroup) on(str string, callback func(interface{})) {
 	gid := eGoid(this)
-	this.onMap[gid][str] = callback
+	if this.onMap[gid][str] == nil {
+		this.onMap[gid][str] = []func(interface{}){callback}
+	} else {
+		this.onMap[gid][str] = append(this.onMap[gid][str], callback)
+	}
 }
 func (this EvtGroup) once(str string, callback func(interface{})) {
 	gid := eGoid(this)
-	this.onMap[gid][str] = func(d interface{}) {
-		callback(d)
-		delete(this.onMap[gid], str)
+	if this.onMap[gid][str] == nil {
+		this.onMap[gid][str] = []func(interface{}){func(d interface{}) {
+			callback(d)
+			delete(this.onMap[gid], str)
+		}}
+	} else {
+		this.onMap[gid][str] = append(this.onMap[gid][str], func(d interface{}) {
+			callback(d)
+			delete(this.onMap[gid], str)
+		})
 	}
 }
 func (this EvtGroup) emit(str string, data interface{}) {
@@ -123,8 +138,8 @@ func (this EvtGroup) loop() { // 多协程事件循环
 
 			for evtname, emitdata := range nodeEmitMap {
 				for _, data := range emitdata {
-					cb := this.onMap[thisgid][evtname] // 获取当前节点的监听事件
-					if cb != nil {
+					cbs := this.onMap[thisgid][evtname] // 获取当前节点的监听事件
+					for _, cb := range cbs {
 						cb(data)
 					}
 				}
@@ -154,7 +169,10 @@ func main() {
 	evt := EvtCreate()
 
 	evt.on("evt", func(data interface{}) {
-		fmt.Println(Goid(), data)
+		fmt.Println(Goid(), 11, data)
+	})
+	evt.on("evt", func(data interface{}) {
+		fmt.Println(Goid(), 22, data)
 	})
 	evt.emit("evt", "aab")
 	go func() {
