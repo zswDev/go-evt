@@ -1,2 +1,2 @@
-# js-coroutine
-A JS covariance Library
+# go-evt
+A GoLang Event Library
