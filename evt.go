@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+// goid ,可能并发，需要在函数defer 时，清楚改goid 队列
+
 func Goid() int {
 	defer func() {
 		if err := recover(); err != nil {
@@ -22,15 +24,43 @@ func Goid() int {
 	if err != nil {
 		panic(fmt.Sprintf("cannot get goroutine id: %v", err))
 	}
+
 	return id
 }
-
-// goid ,可能并发，需要在函数defer 时，清楚改goid 队列
 
 type EvtGroup struct {
 	onMap   map[int]map[string]func(interface{})
 	emitMap map[int]map[string][]interface{}
 	date    map[int]map[int64][]func()
+}
+
+func eGoid(this EvtGroup) int {
+	defer func() {
+		if err := recover(); err != nil {
+			fmt.Println("panic recover:panic info:%v", err)
+		}
+	}()
+
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	idField := strings.Fields(strings.TrimPrefix(string(buf[:n]), "goroutine "))[0]
+	id, err := strconv.Atoi(idField)
+	if err != nil {
+		panic(fmt.Sprintf("cannot get goroutine id: %v", err))
+	}
+
+	// 初始化
+	if this.onMap[id] == nil {
+		this.onMap[id] = make(map[string]func(interface{}))
+	}
+	if this.emitMap[id] == nil {
+		this.emitMap[id] = make(map[string][]interface{})
+	}
+	if this.date[id] == nil {
+		this.date[id] = make(map[int64][]func())
+	}
+
+	return id
 }
 
 // 前一个值是，goid 保证，数据不冲突
@@ -43,30 +73,18 @@ func EvtCreate() *EvtGroup {
 }
 
 func (this EvtGroup) on(str string, callback func(interface{})) {
-	gid := Goid()
-	if this.onMap[gid] == nil {
-		this.onMap[gid] = make(map[string]func(interface{}))
-	}
-
+	gid := eGoid(this)
 	this.onMap[gid][str] = callback
 }
 func (this EvtGroup) once(str string, callback func(interface{})) {
-	gid := Goid()
-	if this.onMap[gid] == nil {
-		this.onMap[gid] = make(map[string]func(interface{}))
-	}
+	gid := eGoid(this)
 	this.onMap[gid][str] = func(d interface{}) {
 		callback(d)
 		delete(this.onMap[gid], str)
 	}
 }
-
 func (this EvtGroup) emit(str string, data interface{}) {
-	gid := Goid()
-	if this.emitMap[gid] == nil {
-		this.emitMap[gid] = make(map[string][]interface{})
-	}
-
+	gid := eGoid(this)
 	emit := this.emitMap[gid][str]
 	if emit != nil {
 		this.emitMap[gid][str] = append(emit, data)
@@ -75,14 +93,11 @@ func (this EvtGroup) emit(str string, data interface{}) {
 	}
 }
 func (this EvtGroup) close(str string) {
-	gid := Goid()
+	gid := eGoid(this)
 	delete(this.onMap[gid], str)
 }
 func (this EvtGroup) setTime(cb func(), tlen int64) {
-	gid := Goid()
-	if this.date[gid] == nil {
-		this.date[gid] = make(map[int64][]func())
-	}
+	gid := eGoid(this)
 	tlen = time.Now().UnixNano()/1000000 + tlen
 	cbs := this.date[gid][tlen]
 	if cbs != nil {
@@ -92,7 +107,7 @@ func (this EvtGroup) setTime(cb func(), tlen int64) {
 	}
 }
 func (this EvtGroup) loop() { // 多协程事件循环
-	thisgid := Goid()
+	thisgid := eGoid(this)
 	defer func() {
 		this.onMap[thisgid] = nil
 		this.emitMap[thisgid] = nil
@@ -129,7 +144,7 @@ func (this EvtGroup) loop() { // 多协程事件循环
 			}
 		}
 		if len(this.date[thisgid]) == 0 {
-			fmt.Println(Goid(), ":exit loop")
+			fmt.Println(eGoid(this), ":exit loop")
 			return
 		}
 		time.Sleep(time.Millisecond * 1)
@@ -228,13 +243,13 @@ func main() {
 		evt.on("aab", func(data interface{}) {
 			fmt.Println(Goid(), data)
 		})
-		evt.loop()
+		evt.setTime(func() {
+			fmt.Println(Goid(), "setTimeout")
+		}, 800)
+		evt.loop() // 注意事件循环退出
 	}()
 	go func() {
 		//fmt.Println(Goid())
-		evt.setTime(func() {
-			fmt.Println(Goid(), "setTimeout")
-		}, 500)
 		time.Sleep(time.Millisecond * 500)
 		evt.emit("aab", "???")
 		evt.emit("evt", 1234)
