@@ -33,11 +33,18 @@ type List struct { // 监听链表
 	cb  func(interface{})
 	ptr *List
 }
+type tList struct { // 监听链表
+	cb  func()
+	ptr *tList
+}
 
+type Inbox struct {
+	data []interface{} // 信件
+	li   *List         // 收件箱
+}
 type EvtGroup struct {
-	onMap   map[int]map[string][]func(interface{})
-	emitMap map[int]map[string][]interface{}
-	date    map[int]map[int64][]func()
+	inboxs   map[int]map[string]*Inbox
+	datelist map[int]map[int64]*tList
 }
 
 func eGoid(this EvtGroup) int {
@@ -56,14 +63,11 @@ func eGoid(this EvtGroup) int {
 	}
 
 	// 初始化
-	if this.onMap[id] == nil {
-		this.onMap[id] = make(map[string][]func(interface{}))
+	if this.datelist[id] == nil {
+		this.datelist[id] = make(map[int64]*tList)
 	}
-	if this.emitMap[id] == nil {
-		this.emitMap[id] = make(map[string][]interface{})
-	}
-	if this.date[id] == nil {
-		this.date[id] = make(map[int64][]func())
+	if this.inboxs[id] == nil {
+		this.inboxs[id] = make(map[string]*Inbox)
 	}
 
 	return id
@@ -71,95 +75,175 @@ func eGoid(this EvtGroup) int {
 
 func EvtCreate() *EvtGroup {
 	this := new(EvtGroup)
-	this.onMap = make(map[int]map[string][]func(interface{}))
-	this.emitMap = make(map[int]map[string][]interface{})
-	this.date = make(map[int]map[int64][]func())
+	this.inboxs = make(map[int]map[string]*Inbox)
+	this.datelist = make(map[int]map[int64]*tList) // TODO, 最小堆，
 	return this
 }
 
 func (this EvtGroup) on(str string, callback func(interface{})) {
 	gid := eGoid(this)
-	if this.onMap[gid][str] == nil {
-		this.onMap[gid][str] = []func(interface{}){callback}
+
+	var li List
+	li.cb = callback
+
+	inbox := this.inboxs[gid][str]
+	if inbox == nil {
+		this.inboxs[gid][str] = &Inbox{
+			data: make([]interface{}, 0),
+			li:   &li,
+		}
+	} else if inbox.li == nil {
+		this.inboxs[gid][str].li = &li
 	} else {
-		this.onMap[gid][str] = append(this.onMap[gid][str], callback)
+		if inbox.li.ptr != nil {
+			li.ptr = inbox.li.ptr
+		}
+		this.inboxs[gid][str].li.ptr = &li
 	}
 }
 func (this EvtGroup) once(str string, callback func(interface{})) {
 	gid := eGoid(this)
-	if this.onMap[gid][str] == nil {
-		this.onMap[gid][str] = []func(interface{}){func(d interface{}) {
-			callback(d)
-			delete(this.onMap[gid], str)
-		}}
+
+	var li List
+	li.cb = func(i interface{}) {
+		callback(i)
+		delete(this.inboxs[gid], str)
+	}
+
+	inbox := this.inboxs[gid][str]
+	if inbox == nil {
+		this.inboxs[gid][str] = &Inbox{
+			data: make([]interface{}, 0),
+			li:   &li,
+		}
+	} else if inbox.li == nil {
+		this.inboxs[gid][str].li = &li
 	} else {
-		this.onMap[gid][str] = append(this.onMap[gid][str], func(d interface{}) {
-			callback(d)
-			delete(this.onMap[gid], str)
-		})
+		if inbox.li.ptr != nil {
+			li.ptr = inbox.li.ptr
+		}
+		this.inboxs[gid][str].li.ptr = &li
 	}
 }
+
 func (this EvtGroup) emit(str string, data interface{}) {
 	gid := eGoid(this)
-	emit := this.emitMap[gid][str]
-	if emit != nil {
-		this.emitMap[gid][str] = append(emit, data)
+	inbox := this.inboxs[gid][str]
+
+	if inbox != nil {
+		if inbox.data == nil {
+			this.inboxs[gid][str].data = []interface{}{data}
+		} else {
+			this.inboxs[gid][str].data = append(inbox.data, data)
+		}
 	} else {
-		this.emitMap[gid][str] = []interface{}{data}
+		var li Inbox
+		li.data = []interface{}{data}
+		this.inboxs[gid][str] = &li
 	}
 }
 func (this EvtGroup) close(str string) {
 	gid := eGoid(this)
-	delete(this.onMap[gid], str)
+	delete(this.inboxs[gid], str)
 }
 func (this EvtGroup) setTime(cb func(), tlen int64) {
 	gid := eGoid(this)
 	tlen = time.Now().UnixNano()/1000000 + tlen
-	cbs := this.date[gid][tlen]
-	if cbs != nil {
-		this.date[gid][tlen] = append(cbs, cb)
+	lis := this.datelist[gid][tlen]
+	var tli tList
+	tli.cb = cb
+	if lis == nil {
+		this.datelist[gid][tlen] = &tli
 	} else {
-		this.date[gid][tlen] = []func(){cb}
+		if lis.ptr != nil {
+			tli.ptr = lis.ptr
+		}
+		lis.ptr = &tli
 	}
 }
+func (this EvtGroup) setTimeLoop(cb func(), tlen int64) {
+	gid := eGoid(this)
+	tkey := time.Now().UnixNano()/1000000 + tlen
+	lis := this.datelist[gid][tkey]
+	var tli tList
+
+	tli.cb = func() {
+		//fmt.Println("aa1")
+		this.setTimeLoop(cb, tlen)
+		cb()
+	}
+	if lis == nil {
+		this.datelist[gid][tkey] = &tli
+	} else {
+		if lis.ptr != nil {
+			tli.ptr = lis.ptr
+		}
+		lis.ptr = &tli
+	}
+}
+
+func dgRun(li *List, data interface{}) {
+	if li == nil {
+		return
+	}
+	li.cb(data)
+	dgRun(li.ptr, data)
+}
+func tdgRun(tli *tList) {
+	if tli == nil {
+		return
+	}
+	tli.cb()
+	tdgRun(tli.ptr)
+}
+
 func (this EvtGroup) loop() { // 多协程事件循环
 	thisgid := eGoid(this)
 	defer func() {
-		this.onMap[thisgid] = nil
-		this.emitMap[thisgid] = nil
-		this.date[thisgid] = nil
+		this.inboxs[thisgid] = nil
+		this.datelist[thisgid] = nil
 		fmt.Println(thisgid, "delete data")
 	}()
 
 	for {
 		// 事件发射通知，全部协程都收取
-		for gid, nodeEmitMap := range this.emitMap {
-			// 获取某个节点的事件
-
-			for evtname, emitdata := range nodeEmitMap {
+		for gid, nodeMap := range this.inboxs {
+			// 获取某个节点的所有收件箱
+			for evtname, inbox := range nodeMap {
+				emitdata := inbox.data
+				oncb := inbox.li
 				for _, data := range emitdata {
-					cbs := this.onMap[thisgid][evtname] // 获取当前节点的监听事件
-					for _, cb := range cbs {
-						cb(data)
+					if oncb != nil && this.inboxs[gid][evtname] != nil {
+						dgRun(oncb, data) // 这里可能会导致 inbox被回收, once
 					}
 				}
-				delete(this.emitMap[gid], evtname)
+				if this.inboxs[gid][evtname] != nil {
+					this.inboxs[gid][evtname].data = []interface{}{}
+				}
 			}
 		}
 
 		// 时间循环
 		now := time.Now().UnixNano() / 1000000
-		for i, cbs := range this.date[thisgid] {
+		for i, cbs := range this.datelist[thisgid] {
 			if i <= now {
-				for _, cb := range cbs {
-					cb()
-				}
-				delete(this.date[thisgid], i)
+				tdgRun(cbs)
+				delete(this.datelist[thisgid], i)
 			}
 		}
-		if len(this.date[thisgid]) == 0 {
-			fmt.Println(eGoid(this), ":exit loop")
-			return
+		if len(this.datelist[thisgid]) == 0 {
+			// 如果无延时了就退出
+			ei := false
+			for _, inbox := range this.inboxs[thisgid] {
+				if len(inbox.data) != 0 {
+					ei = true
+					break
+				}
+			}
+			if !ei {
+				fmt.Println(eGoid(this), ":exit loop")
+				return
+			}
 		}
 		time.Sleep(time.Millisecond * 1)
 	}
@@ -168,31 +252,19 @@ func (this EvtGroup) loop() { // 多协程事件循环
 func main() {
 	evt := EvtCreate()
 
-	evt.on("evt", func(data interface{}) {
-		fmt.Println(Goid(), 11, data)
-	})
-	evt.on("evt", func(data interface{}) {
-		fmt.Println(Goid(), 22, data)
-	})
-	evt.emit("evt", "aab")
-	go func() {
-		evt.on("aab", func(data interface{}) {
-			fmt.Println(Goid(), data)
-		})
-		evt.setTime(func() {
-			fmt.Println(Goid(), "setTimeout")
-		}, 800)
-		evt.loop() // 注意事件循环退出
-	}()
-	go func() {
-		//fmt.Println(Goid())
-		time.Sleep(time.Millisecond * 500)
-		evt.emit("aab", "???")
-		evt.emit("evt", 1234)
-	}()
+	defer evt.loop()
+
 	evt.setTime(func() {
 		fmt.Println(Goid(), "setTimeout")
+		evt.emit("aab", "124")
 	}, 1000)
+	evt.on("aab", func(i interface{}) {
+		fmt.Println("dd", i)
+	})
+	// 不能 跨越 协程，通信，待完善
 
-	evt.loop()
+	/*evt.setTimeLoop(func() {
+		i++
+		evt.emit("aab", i)
+	}, 1000) */
 }
